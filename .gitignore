@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.sample
+__pycache__/
+*.pyc
+scripts/smoke_results.json
+.venv/
+.DS_Store
