@@ -1,0 +1,106 @@
+# Curie seed narrative — the Antmatter Lab (a simulated protein-ML lab), ~6 months.
+# Authored as real dummy members (backend.md §9) so RTS finds it. Deterministic: eval fixtures
+# reference these by `ref`. Every failure has a REASON (that reason is what Curie surfaces).
+# Label honestly: this is a simulated lab modeled on real computational-biology workflows.
+
+lab:
+  name: "Antimatter Lab"
+  field: "protein language models for enzyme design"
+  channel: "#experiments"
+  description: "Simulated lab workspace for the Curie demo. Modeled on real comp-bio ML workflows."
+
+members:                       # map to SEED_USER_TOKEN_1..3 at seed time
+  - {handle: anika,  name: "Anika Rao",    token_env: SEED_USER_TOKEN_1, role: "PhD, protein LMs"}
+  - {handle: marco,  name: "Marco Bianchi", token_env: SEED_USER_TOKEN_2, role: "postdoc, optimization"}
+  - {handle: priya,  name: "Priya Nair",   token_env: SEED_USER_TOKEN_3, role: "new PhD (the demo's protagonist)"}
+
+# Hypotheses become parent rows in the List (ledger). Statuses roll up from evidence.
+hypotheses:
+  - id: H1
+    text: "Curriculum ordering (easy→hard sequences) improves convergence on enzyme-activity regression"
+    status: supported          # 3 supporting experiments
+  - id: H2
+    text: "Scaling the ESM head (LoRA on more layers) beats full fine-tuning for our assay"
+    status: refuted            # 2 refuting experiments + 1 external null  <-- THE demo hypothesis
+  - id: H3
+    text: "Synthetic-pretraining on generated sequences transfers to real wet-lab assays"
+    status: open               # 1 running
+
+# Experiments. `landmine: true` = a config a judge is likely to re-type → must trigger a collision.
+experiments:
+  - ref: exp_esm_full_mar12
+    hypothesis: H2
+    owner: anika
+    date: "2026-03-12"
+    status: failed
+    landmine: true
+    plan: "Fine-tune the ESM baseline (ESM2-650M), lr 1e-4, batch 32, on the v1 split. Full fine-tune."
+    params: {model: ESM2-650M, lr: "1e-4", batch: "32", split: v1, method: full_finetune}
+    outcome: "FAILED — gradient collapse after epoch 3, loss went NaN. Full fine-tune at lr 1e-4 is unstable for us."
+    thread:
+      - {who: anika, text: "kicking off the ESM full fine-tune, lr 1e-4 batch 32 on v1. fingers crossed"}
+      - {who: marco, text: "1e-4 on the full 650M feels hot. we saw instability before"}
+      - {who: anika, text: "yeah it NaN'd at epoch 3 again. gradient collapse. calling it. full FT at this LR is a no-go"}
+      - {who: marco, text: "noted. either drop LR to 1e-5 or go LoRA"}
+  - ref: exp_esm_lora_apr02
+    hypothesis: H2
+    owner: marco
+    date: "2026-04-02"
+    status: failed
+    landmine: true
+    plan: "LoRA on ESM2-650M, rank 16, lr 1e-4, batch 32, v2 split — scaling the head per H2."
+    params: {model: ESM2-650M, lr: "1e-4", batch: "32", split: v2, method: lora_r16}
+    outcome: "FAILED to beat baseline. LoRA head-scaling gave +0.2% — within noise. H2 not supported."
+    thread:
+      - {who: marco, text: "LoRA r16 run for H2, scaling the head. lr 1e-4 batch 32 v2"}
+      - {who: marco, text: "done. +0.2% over baseline, that's noise. H2 is looking wrong tbh"}
+      - {who: anika, text: "second failure for H2. I think we mark it refuted"}
+  - ref: exp_curriculum_feb
+    hypothesis: H1
+    owner: anika
+    date: "2026-02-20"
+    status: succeeded
+    plan: "Curriculum ordering easy→hard on the activity regression, lr 3e-5, batch 64."
+    params: {lr: "3e-5", batch: "64", method: curriculum}
+    outcome: "SUCCESS — +3.1% Spearman, clean convergence. Curriculum helps (H1)."
+    thread:
+      - {who: anika, text: "curriculum run converged nicely, +3.1% spearman. H1 supported"}
+  - ref: exp_curriculum_mar
+    hypothesis: H1
+    owner: priya
+    date: "2026-03-28"
+    status: succeeded
+    plan: "Replicate curriculum with a different seed, lr 3e-5 batch 64."
+    params: {lr: "3e-5", batch: "64", method: curriculum}
+    outcome: "SUCCESS — +2.8%, replicates. H1 holding up."
+    thread:
+      - {who: priya, text: "curriculum replicates, +2.8% on seed 7. nice"}
+  - ref: exp_synth_may
+    hypothesis: H3
+    owner: marco
+    date: "2026-05-15"
+    status: running
+    plan: "Synthetic pretraining on 2M generated sequences, then fine-tune on real assay (H3)."
+    params: {method: synthetic_pretrain, corpus: 2M}
+    outcome: "RUNNING — pretraining in progress, real-assay eval pending."
+    thread:
+      - {who: marco, text: "started the synthetic-pretrain for H3. 2M seqs. eval in ~2 weeks"}
+  - ref: exp_dropout_apr
+    hypothesis: null
+    owner: anika
+    date: "2026-04-18"
+    status: failed
+    landmine: true
+    plan: "Add 0.3 dropout to the regression head to fight overfitting, lr 3e-5 batch 64."
+    params: {dropout: "0.3", lr: "3e-5", batch: "64"}
+    outcome: "FAILED — 0.3 dropout underfit badly, -4%. Too aggressive for this head size."
+    thread:
+      - {who: anika, text: "tried 0.3 dropout on the head. way worse, -4%. underfitting. 0.1 max next time"}
+
+# Extra channel color so the workspace feels lived-in (judges scroll).
+paper_club:
+  - {who: marco, text: "dropping this ESM2 fine-tuning paper for Thursday: strong results on stability prediction"}
+  - {who: priya, text: "there's a bioRxiv preprint claiming LoRA head-scaling doesn't beat full FT on small assays — relevant to H2"}
+general:
+  - {who: anika, text: "reminder: log your failed runs too, not just the wins. we keep re-running dead configs"}
+  - {who: priya, text: "still onboarding — where do I find what's been tried on ESM? scrolling forever"}
