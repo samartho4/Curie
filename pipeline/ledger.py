@@ -28,9 +28,11 @@ from collections import defaultdict
 from typing import Optional
 
 from tools import record_store as rs
+from tools import charts
 
 # ---- copy (frontend.md §4D layout + §9 deck; voice: plain, specific, no exclamation) --------
 HEADER = "Where the lab stands"
+CHART_TITLE = "Evidence per hypothesis"   # native bar chart above the itemized claims (§4D)
 # §9 verbatim, encoded for mrkdwn: &lt;/&gt; render as < > (a raw "<your claim>" would be
 # swallowed as a broken link control sequence).
 LEDGER_EMPTY = ("No hypotheses tracked yet. Start one: "
@@ -173,12 +175,42 @@ def ledger_view_blocks(record) -> list[dict]:
         return blocks
 
     _sort_by_activity(hypos, children)           # §4D: ordered by activity, newest first
+    chart = _evidence_chart_block(hypos, children)   # native bar chart of the real roll-up counts
+    if chart:                                    # skipped (text-only) when no evidence exists yet
+        blocks.append(chart)
     for hyp in hypos[:_MAX_SECTIONS]:
         blocks.append(_s(_hypo_md(hyp, children.get(hyp["row_id"], []))))
     if len(hypos) > _MAX_SECTIONS:
         blocks.append(_ctx(f"…and {len(hypos) - _MAX_SECTIONS} more in the Lab Record"))
     blocks.append(_ctx(LEDGER_FOOTER))
     return blocks
+
+
+def _evidence_chart_block(ordered_hypos: list[dict], children: dict) -> Optional[dict]:
+    """Native bar chart of the ledger's REAL roll-up counts — supports vs contrasts, one bar-group
+    per hypothesis. Uses the exact same per-hypothesis counts `_hypo_md` shows (so the chart can
+    never disagree with the text) and the already-sorted order (so bars line up with the sections
+    below). Returns None when no hypothesis has any evidence yet — an all-zero chart would mislead,
+    so the ledger renders text-only until evidence exists. Never raises (data_viz_block is total)."""
+    cats: list[str] = []
+    supports: list[int] = []
+    contrasts: list[int] = []
+    total = 0
+    for hyp in ordered_hypos[:_MAX_SECTIONS]:
+        kids = children.get(hyp.get("row_id"), [])
+        s = sum(1 for k in kids if k.get("polarity") == "supports")
+        c = sum(1 for k in kids if k.get("polarity") == "contrasts")
+        cats.append(hyp.get("title") or "(untitled hypothesis)")
+        supports.append(s)
+        contrasts.append(c)
+        total += s + c
+    if not cats or total == 0:
+        return None
+    return charts.data_viz_block(
+        CHART_TITLE, "bar",
+        [{"name": "supports", "data": supports}, {"name": "contrasts", "data": contrasts}],
+        cats, x_label="hypothesis", y_label="experiments",
+    )
 
 
 # ---- weekly belief digest (used by listeners.standing: run-now + Monday schedule) ------------
@@ -210,6 +242,9 @@ def belief_digest_blocks(record) -> list[dict]:
         return blocks
 
     resolved.sort(key=lambda t: 0 if t[2] == "refuted" else 1)   # refutations first
+    chart = _evidence_chart_block([t[0] for t in resolved], children)   # native bar chart on the digest (reuses the ledger's truthful counts)
+    if chart:
+        blocks.append(chart)
     for hyp, kids, status in resolved[:_MAX_SECTIONS]:
         emoji = _STATUS_EMOJI.get(status, "🟡")
         supports = sum(1 for k in kids if k.get("polarity") == "supports")
