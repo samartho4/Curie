@@ -113,15 +113,24 @@ class RTS:
         #               message_ts, thread_ts, content, permalink, context_messages}.
         # Fallbacks (text/channel/ts/user) keep us robust if the sandbox differs.
         messages = (r.get("results") or {}).get("messages") or []
+        # Dotless form of our own ts (e.g. "p1783722835912419") — how it appears inside a permalink;
+        # lets us self-exclude even when the ts field lands under an unexpected key in the payload.
+        own_perma_frag = ("p" + self.own_msg_ts.replace(".", "")) if self.own_msg_ts else None
         out = []
         for m in messages:
             author = m.get("author_user_id") or m.get("user")
             if self.own_bot_user_id and author == self.own_bot_user_id:
                 continue
             channel = m.get("channel_id") or m.get("channel")
-            ts = m.get("message_ts") or m.get("ts")
-            if self.own_msg_ts and str(ts) == self.own_msg_ts:
-                continue  # the plan we're checking is itself indexed — don't collide with it
+            ts = m.get("message_ts") or m.get("ts") or m.get("thread_ts")
+            permalink = m.get("permalink") or _archive_link(channel, ts)
+            # The plan we're checking is itself indexed — never collide with it. Match on the ts field
+            # AND on the permalink (belt-and-suspenders: the permalink encodes the ts even if the
+            # response nests/renames the ts field). Biasing toward dropping a self-hit is safe (§13).
+            if self.own_msg_ts and _ts_eq(ts, self.own_msg_ts):
+                continue
+            if own_perma_frag and permalink and own_perma_frag in permalink.replace(".", ""):
+                continue
             text = strip_slack_formatting(m.get("content") or m.get("text") or "")
             if not text:
                 continue
@@ -129,7 +138,7 @@ class RTS:
                 "source": "rts",
                 "title": text[:90],
                 "text": text,
-                "permalink": m.get("permalink") or _archive_link(channel, ts),
+                "permalink": permalink,
                 "outcome": None,
                 "params": {},
                 "channel": channel,
@@ -143,3 +152,11 @@ def _archive_link(channel, ts) -> str:
     if not channel or not ts:
         return ""
     return f"https://slack.com/archives/{channel}/p{str(ts).replace('.', '')}"
+
+
+def _ts_eq(a, b) -> bool:
+    """Slack ts equality that tolerates float/str drift and the dotless permalink form."""
+    if not a or not b:
+        return False
+    a, b = str(a).strip(), str(b).strip()
+    return a == b or a.replace(".", "") == b.replace(".", "")

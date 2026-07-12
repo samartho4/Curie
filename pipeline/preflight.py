@@ -255,12 +255,36 @@ def _calibrate(vj: _VerdictJSON, plan: Plan, slack: list[Candidate],
         level = "clear"
         note = note or "1 loosely-related thread — view."
 
-    if level == "clear":
-        return Verdict(level="clear", confidence=max(vj.confidence, 0.65),
-                       summary=vj.summary or BODY_CLEAR, literature=lit, note=note)
-
-    primary = _primary_prior(plan, cited_slack, slack)
+    # Resolve the STRONGEST real prior (most matching params) and build its diff BEFORE finalizing
+    # the level, so the deterministic empty-diff guard below can veto a "collision" whose evidence has
+    # nothing comparable to the plan.
+    primary = _primary_prior(plan, cited_slack, slack) if level != "clear" else None
     diff = _diff(plan, primary) if primary else []
+    matching_params = sum(1 for d in diff if d.same)
+    comparable_params = sum(1 for d in diff if d.prior_value != "—" and d.plan_value != "—")
+
+    # ---- HARD GUARD (§13): an "empty-diff" collision is NOT a collision. -----------------------
+    # A real collision requires >=1 CONCRETE matching parameter from a real recorded experiment
+    # (a populated prior side). This holds even if self-exclusion leaks: the triggering message — or
+    # any echoed copy of the plan retrieved by search — carries NO structured params, so the prior
+    # side of every diff row is empty, nothing matches, and it can never be labelled a collision.
+    # This single rule kills the self-collision / false-collision class regardless of retrieval.
+    if level == "collision" and matching_params < 1:
+        # Genuine partial overlap (a shared, differing param on a real prior) → near_miss; else clear.
+        level = "near_miss" if (comparable_params >= 1 and any(_method_match(plan, c) for c in slack)) else "clear"
+
+    # A near_miss must still rest on a prior that carries comparable structure. A candidate with no
+    # params at all (a raw message / self-echo — RTS hits always have empty params) can't substantiate
+    # even a near_miss diff, so downgrade it to the confident default rather than show an empty card.
+    if level == "near_miss" and not (primary and primary.params):
+        level = "clear"
+
+    if level == "clear":
+        # Never leak collision-flavoured prose onto a clear card when we demoted the LLM's level.
+        summary = vj.summary if vj.level == "clear" else BODY_CLEAR
+        return Verdict(level="clear", confidence=max(vj.confidence, 0.65),
+                       summary=summary or BODY_CLEAR, literature=lit, note=note)
+
     collisions = [c for c in (cited_slack or slack) if _method_match(plan, c)][:3] or ([primary] if primary else [])
     return Verdict(level=level, confidence=vj.confidence, summary=vj.summary,
                    collisions=collisions, literature=lit, diff=diff, note=note)
@@ -294,10 +318,14 @@ def _param_match_count(plan: Plan, c: Candidate) -> int:
 
 def _primary_prior(plan: Plan, cited: list[Candidate], all_slack: list[Candidate]) -> Optional[Candidate]:
     pool = [c for c in (cited or all_slack) if c.source == "list"] or (cited or all_slack)
-    for c in pool:
+    # Prefer the candidate that best substantiates the collision: the most matching params (so the
+    # rendered diff is built from a REAL prior with comparable settings), then a method match. This
+    # stops a param-less self-echo from being chosen as the "prior" over an actual recorded run.
+    ranked = sorted(pool, key=lambda c: (_param_match_count(plan, c), _method_match(plan, c)), reverse=True)
+    for c in ranked:
         if _method_match(plan, c):
             return c
-    return pool[0] if pool else None
+    return ranked[0] if ranked else None
 
 
 def _diff(plan: Plan, prior: Candidate) -> list[DiffLine]:
