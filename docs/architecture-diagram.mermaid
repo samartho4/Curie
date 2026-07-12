@@ -1,0 +1,49 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Helvetica, Arial, sans-serif','fontSize':'14px','primaryColor':'#F4EDF5','primaryBorderColor':'#4A154B','primaryTextColor':'#1d1c1d','lineColor':'#6b6b6b','clusterBkg':'#FBFAFC','clusterBorder':'#C9BFD1'}}}%%
+flowchart LR
+    scientist(["👩‍🔬 Scientist<br/>posts a plan"])
+
+    subgraph SLACK["SLACK — the workspace <b>is</b> the memory"]
+        direction TB
+        CH["#experiments<br/><i>where the lab talks</i>"]
+        LIST["Lab Record — a Slack List<br/><i>hypotheses ▸ experiments</i>"]
+        CANVAS["Canvases<br/><i>self-writing notebook pages</i>"]
+        HOME["App Home<br/><i>the belief ledger</i>"]
+    end
+
+    subgraph CURIE["CURIE — Bolt for Python · Socket Mode · EC2"]
+        direction TB
+        LIS["listeners<br/><i>@mention · DM · 🧪 · App Home · poller</i>"]
+        PIPE["verdict pipeline — <b>deterministic</b><br/><i>extract → search → rule → card</i>"]
+        TOOLS["tools<br/><i>RTS · Lists · scholar</i>"]
+        LLM["one LLM client<br/><i>extracts params + writes prose only</i>"]
+    end
+
+    SCI["🧪 Claude Science<br/><i>runs the experiment</i>"]
+    LIT[("📚 Literature<br/>OpenAlex · bioRxiv")]
+
+    %% ---- query loop ----
+    scientist -->|"@Prior &lt;plan&gt;"| CH
+    CH -->|app_mention| LIS
+    LIS --> PIPE
+    PIPE --> TOOLS
+    TOOLS -.->|"RTS: assistant.search.context"| CH
+    TOOLS -.->|Lists API| LIST
+    TOOLS -.-> LIT
+    LLM -.-> PIPE
+    PIPE ==>|"streamed verdict card"| CH
+
+    %% ---- autonomy loop (record writes itself) ----
+    SCI ==>|"📊 run-record"| CH
+    CH -.->|"poll: conversations.history"| LIS
+    LIS -->|"update row · recompute"| LIST
+    LIS ==>|"belief-change alert — unprompted"| CH
+
+    CURIE --- HOME
+    CURIE --- CANVAS
+
+    classDef slackNode fill:#F4EDF5,stroke:#4A154B,stroke-width:1px,color:#1d1c1d;
+    classDef curieNode fill:#EAECFB,stroke:#2B2D6E,stroke-width:1px,color:#1d1c1d;
+    classDef extNode fill:#FBEEE8,stroke:#C05A38,stroke-width:1px,color:#1d1c1d;
+    class CH,LIST,CANVAS,HOME slackNode;
+    class LIS,PIPE,TOOLS,LLM curieNode;
+    class SCI,LIT,scientist extNode;
