@@ -52,9 +52,62 @@ _r6_matching = [d for d in r6.diff if d.same]
 print(f"CASE6 ESM landmine → {r6.level!r} (must be 'collision'); "
       f"diff rows={len(r6.diff)} matching={len(_r6_matching)} (both must be >=1)")
 
+# CASE 7: THE LIVE FALSE-CLEAR FIX. A COMPLETED experiment reported in CHAT (free text; RTS gives it
+# params={}) that carries a RESULT signal (done / R2 / converged / epochs) AND matches method +
+# dataset + config → a GENUINE collision. Params are text-extracted so the diff is NON-EMPTY. This is
+# GAT-201 from the deployed-bug report; before the fix it wrongly returned "clear".
+plan_gat2 = Plan(method="train a GAT on the reaction-network dataset", params={"lr": "3e-4", "batch": "64"},
+                 dataset="reaction-network", aliases=["GAT", "graph attention network"])
+completed = Candidate(source="rts",
+    title="exp GAT-201 done: trained a GAT on the reaction-network dataset",
+    text="exp GAT-201 done: trained a GAT on the reaction-network dataset, v2 split — R2 0.74, "
+         "converged in 40 epochs. Best yield model yet, lr 3e-4 batch 64",
+    permalink="https://slack.com/archives/CXX/p1783700000000000", params={})  # RTS => no params
+vj_completed = _VerdictJSON(level="collision", confidence=0.9,
+                            summary="GAT-201 already ran this config", collision_indices=[0])
+r7 = _calibrate(vj_completed, plan_gat2, [completed], [])
+_r7_matching = [d for d in r7.diff if d.same]
+print(f"CASE7 completed CHAT prior + result  → {r7.level!r} (must be 'collision'); "
+      f"diff rows={len(r7.diff)} matching={len(_r7_matching)} (both must be >=1)")
+
+# CASE 8: a PLAN RE-POST (someone restating the plan; future-tense, NO result/outcome signal) must
+# stay CLEAR even though it names the same method + dataset + params. No completed run => no collision.
+echo_plan = Candidate(source="rts", title="planning GAT run",
+    text="planning to train a GAT on the reaction-network dataset next week, Adam optimizer, lr 3e-4, batch 64",
+    permalink="https://slack.com/archives/CXX/p1783699999999999", params={})
+vj_echo2 = _VerdictJSON(level="collision", confidence=0.9, summary="looks already tried", collision_indices=[0])
+r8 = _calibrate(vj_echo2, plan_gat2, [echo_plan], [])
+print(f"CASE8 plan re-post (no result)       → {r8.level!r} (must be 'clear'; diff rows={len(r8.diff)})")
+
+# CASE 9: a CLEAR card must be SELF-CONSISTENT — no diff prose, no citations, no leaked collision note.
+from tools.cards import verdict_blocks
+
+
+def _card_text(blocks):
+    out = []
+    for b in blocks:
+        t = b.get("text")
+        if isinstance(t, dict) and isinstance(t.get("text"), str):
+            out.append(t["text"])
+        for e in (b.get("elements") or []):
+            et = e.get("text") if isinstance(e, dict) else None
+            if isinstance(et, str):
+                out.append(et)
+    return " ".join(out).lower()
+
+
+_flat9 = _card_text(verdict_blocks(r8))
+_clean_card = all(m not in _flat9 for m in
+                  ("differs", "evidence:", "already tried", "match the plan", " vs "))
+print(f"CASE9 clear card is self-consistent  → clean={_clean_card} (must be True; text={_flat9!r})")
+
 ok = (r1.level == "clear" and r2.level == "collision" and r3.level == "clear" and r4.level == "clear"
       and r5.level == "clear"
-      and r6.level == "collision" and len(r6.diff) >= 1 and len(_r6_matching) >= 1)
-print("\n" + ("✅ CALIBRATION GUARD PASSES — false/empty-diff collisions blocked, real ones kept"
+      and r6.level == "collision" and len(r6.diff) >= 1 and len(_r6_matching) >= 1
+      and r7.level == "collision" and len(r7.diff) >= 1 and len(_r7_matching) >= 1
+      and r8.level == "clear"
+      and _clean_card)
+print("\n" + ("✅ CALIBRATION GUARD PASSES — false/empty-diff collisions blocked, completed chat "
+              "priors caught, real ones kept, clear cards self-consistent"
               if ok else "❌ GUARD FAILED"))
 sys.exit(0 if ok else 1)

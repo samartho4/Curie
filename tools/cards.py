@@ -10,6 +10,22 @@ from tools import charts
 
 DISCLAIMER = "🤖 Curie · AI-generated · check before acting"
 
+# Collision-evidence markers that must NEVER appear on a CLEAR card. The pipeline (_calibrate) already
+# strips collision prose when it demotes a verdict; this is a last-line render guard so a clear
+# headline can never contradict its own body (the self-contradictory-card bug).
+_COLLISION_MARKERS = ("collision", "already tried", "match the plan", "matches on", "match on",
+                      "key param", "two key", "same method")
+
+
+def _safe_clear_note(note: str) -> str:
+    """Show a note on a CLEAR card only if it does not read like collision/near-miss evidence."""
+    if not note:
+        return ""
+    low = note.lower()
+    if any(m in low for m in _COLLISION_MARKERS):
+        return ""
+    return note
+
 # Param keys under which a prior run could carry a chartable numeric SERIES (sweep / per-step
 # metric). Deliberately narrow: no current seed/record row uses any of these, so the collision
 # chart never fabricates — it appears only if a real series is ever logged (see _metric_series).
@@ -134,11 +150,13 @@ def _collision_metric_chart(v):
 def verdict_blocks(v, plan_text: str = "") -> list[dict]:
     """Render a Verdict (pipeline.preflight.Verdict) as Block Kit blocks."""
     if v.level == "clear":
-        # deliberately minimal — the common case must never read as noise (frontend §4B)
+        # deliberately minimal — the common case must never read as noise (frontend §4B).
+        # Clear means clear: never render a diff, collisions, or a collision-flavoured note here.
         blocks = [_s(f"✅ *No prior work found on this. Good to go.*")]
         srch = "Searched the lab record + literature"
-        if v.note:
-            srch += f" · {v.note}"
+        _note = _safe_clear_note(v.note)
+        if _note:
+            srch += f" · {_note}"
         blocks.append(_ctx(srch))
         return blocks
 

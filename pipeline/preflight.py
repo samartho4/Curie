@@ -14,6 +14,7 @@ Provider contract (duck-typed):
 Each dict: {source, title, text, permalink, outcome, params, ...}
 """
 from __future__ import annotations
+import re
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 from pydantic import BaseModel
@@ -229,14 +230,22 @@ def run_preflight(plan_text: str, *, record, rts, scholar, status=None) -> Prefl
 
 def _calibrate(vj: _VerdictJSON, plan: Plan, slack: list[Candidate],
                lit: list[Candidate]) -> Verdict:
+    # Enrich free-text COMPLETED-experiment priors (RTS/list rows normalized with params={} — see
+    # tools/rts.py) with params parsed from their text, so a real prior REPORTED IN CHAT (e.g. "exp
+    # GAT-201 done: … R2 0.74 … lr 3e-4 batch 64") yields a populated diff and can collide. A plan
+    # re-post (no result/outcome signal) is left param-less → its diff stays empty → it stays clear
+    # (§13). Never overwrites a structured record's own params.
+    _enrich_text_priors(plan, slack)
+
     evidence = slack + lit
     cited = [evidence[i] for i in vj.collision_indices if 0 <= i < len(evidence)]
     cited_slack = [c for c in cited if c.source in ("list", "rts")] or slack
 
     level = vj.level
     note = vj.note or ""
+    soft_note = ""   # ONLY notes THIS logic authors survive a demotion to clear (never LLM prose).
 
-    # A collision REQUIRES a structured Slack candidate that substantiates it.
+    # A collision REQUIRES a structured/text-derived Slack candidate that substantiates it.
     if level == "collision":
         substantiated = [c for c in cited_slack if _substantiates(plan, c)]
         if not substantiated:
@@ -253,7 +262,7 @@ def _calibrate(vj: _VerdictJSON, plan: Plan, slack: list[Candidate],
     # Low confidence demotes to clear with a soft note (§13).
     if level != "clear" and vj.confidence < _CONF_FLOOR:
         level = "clear"
-        note = note or "1 loosely-related thread — view."
+        soft_note = "1 loosely-related thread — view."
 
     # Resolve the STRONGEST real prior (most matching params) and build its diff BEFORE finalizing
     # the level, so the deterministic empty-diff guard below can veto a "collision" whose evidence has
@@ -264,26 +273,31 @@ def _calibrate(vj: _VerdictJSON, plan: Plan, slack: list[Candidate],
     comparable_params = sum(1 for d in diff if d.prior_value != "—" and d.plan_value != "—")
 
     # ---- HARD GUARD (§13): an "empty-diff" collision is NOT a collision. -----------------------
-    # A real collision requires >=1 CONCRETE matching parameter from a real recorded experiment
-    # (a populated prior side). This holds even if self-exclusion leaks: the triggering message — or
-    # any echoed copy of the plan retrieved by search — carries NO structured params, so the prior
-    # side of every diff row is empty, nothing matches, and it can never be labelled a collision.
-    # This single rule kills the self-collision / false-collision class regardless of retrieval.
+    # A real collision requires >=1 CONCRETE matching parameter from a real prior — one with a
+    # populated prior side, which is now either a structured record OR a completed-experiment message
+    # whose TEXT yielded params. A bare plan echo / self-retrieval carries no result signal, so it
+    # stays param-less, the prior side of every diff row is empty, nothing matches, and it can never
+    # be labelled a collision. This kills the self/false-collision class regardless of retrieval.
     if level == "collision" and matching_params < 1:
         # Genuine partial overlap (a shared, differing param on a real prior) → near_miss; else clear.
         level = "near_miss" if (comparable_params >= 1 and any(_method_match(plan, c) for c in slack)) else "clear"
 
     # A near_miss must still rest on a prior that carries comparable structure. A candidate with no
-    # params at all (a raw message / self-echo — RTS hits always have empty params) can't substantiate
-    # even a near_miss diff, so downgrade it to the confident default rather than show an empty card.
+    # params at all (a raw plan echo / self-echo) can't substantiate even a near_miss diff, so
+    # downgrade it to the confident default rather than show an empty card.
     if level == "near_miss" and not (primary and primary.params):
         level = "clear"
 
     if level == "clear":
-        # Never leak collision-flavoured prose onto a clear card when we demoted the LLM's level.
-        summary = vj.summary if vj.level == "clear" else BODY_CLEAR
+        # SELF-CONSISTENT clear card (§13, frontend §4B): if we DEMOTED the LLM's verdict, drop ALL
+        # of its collision-flavoured prose (summary AND note) plus the diff/collisions — a clear
+        # headline must never carry "candidates match…" evidence. Keep the LLM's own words only when
+        # it ALSO said clear. diff/collisions are intentionally omitted from a clear Verdict.
+        demoted = vj.level != "clear"
+        summary = (vj.summary if not demoted else BODY_CLEAR) or BODY_CLEAR
+        out_note = soft_note if demoted else note
         return Verdict(level="clear", confidence=max(vj.confidence, 0.65),
-                       summary=summary or BODY_CLEAR, literature=lit, note=note)
+                       summary=summary, literature=lit, note=out_note)
 
     collisions = [c for c in (cited_slack or slack) if _method_match(plan, c)][:3] or ([primary] if primary else [])
     return Verdict(level=level, confidence=vj.confidence, summary=vj.summary,
@@ -340,6 +354,97 @@ def _diff(plan: Plan, prior: Candidate) -> list[DiffLine]:
 
 def _clear(note: str = "") -> Verdict:
     return Verdict(level="clear", confidence=0.9, summary=BODY_CLEAR, note=note)
+
+
+# ---- completed-experiment detection + text-derived params ---------------------------------
+# A prior REPORTED AS A CHAT MESSAGE (not a structured record) carries its settings in free text and
+# RTS normalizes it with params={} (tools/rts.py). To let a genuine completed run collide, we (a)
+# require a RESULT/outcome signal so plan re-posts stay clear (§13), then (b) parse only the plan's
+# OWN param keys out of the text. Extraction is constrained to declared keys and a collision still
+# needs value EQUALITY downstream — so this can produce a "differs" row but never a false "same".
+
+_RESULT_TOKENS = (
+    "r2", "r²", "auroc", "auc", "accuracy", "loss", "nan", "rmse", "mae", "f1", "spearman",
+    "converged", "diverged", "collapse", "underfit", "overfit", "unstable",
+    "done", "completed", "complete", "finished", "failed", "succeeded", "success",
+    "result", "results", "epoch", "epochs",
+)
+
+_PARAM_ALIAS_GROUPS = (
+    {"lr", "learning rate", "learning_rate", "learningrate"},
+    {"batch", "batch size", "batch_size", "batchsize", "bs"},
+    {"dropout"},
+    {"rank", "lora rank", "lora_rank"},
+    {"epochs", "epoch"},
+    {"weight decay", "weight_decay", "wd"},
+    {"optimizer"},
+    {"split"},
+    {"momentum"},
+    {"model"},
+    {"corpus"},
+)
+_NUM = r"([0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)"
+
+
+def _has_result_signal(c: Candidate) -> bool:
+    """True if a candidate looks like a COMPLETED experiment (structured outcome, or a metric/status
+    word in its text), vs. a plan or plan re-post. Conservative: a plain plan echo has none of these,
+    so it is never enriched and stays clear (§13)."""
+    if c.outcome:                                      # structured rows already carry an outcome
+        return True
+    text = _norm(c.text or "")
+    if not text:
+        return False
+    return any(re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z])", text) for t in _RESULT_TOKENS)
+
+
+def _aliases_for(key: str) -> list[str]:
+    nk = _norm(key)
+    for g in _PARAM_ALIAS_GROUPS:
+        if nk in g:
+            return sorted(g, key=len, reverse=True)    # try multi-word aliases before short ones
+    return [nk]
+
+
+def _is_number(s: str) -> bool:
+    return bool(re.fullmatch(_NUM, str(s).strip()))
+
+
+def _extract_prior_params(text: str, plan: Plan) -> dict[str, str]:
+    """Best-effort parse of the plan's DECLARED param keys out of a free-text prior message. Returns
+    only keys the plan specifies (those are the only ones we ever compare). A value must be equal to
+    count as a match downstream, so a loose parse can create a 'differs' row but never a false 'same'."""
+    out: dict[str, str] = {}
+    if not text:
+        return out
+    low = _norm(text)
+    word_tokens = set(re.findall(r"[a-z0-9][a-z0-9.+\-]*", low))
+    for k, v in (plan.params or {}).items():
+        found: Optional[str] = None
+        for a in _aliases_for(k):
+            m = re.search(r"(?<![a-z0-9])" + re.escape(a) + r"\s*[:=]?\s*" + _NUM, low)
+            if m:
+                found = m.group(1)
+                break
+        if found is None and v is not None and not _is_number(str(v)):
+            # textual param (optimizer=adam, split=v1, model=esm2-650m): accept plan value if present
+            if _norm(v) in word_tokens:
+                found = _norm(v)
+        if found is not None:
+            out[k] = found
+    return out
+
+
+def _enrich_text_priors(plan: Plan, slack: list[Candidate]) -> None:
+    """In place: give COMPLETED-experiment chat messages (Slack rows with no structured params) a
+    text-derived param map, so a real prior reported in chat yields a populated diff and can collide.
+    Gated on method-match + a result signal; plan re-posts (no result) are left param-less and stay
+    clear (§13). Never overwrites a structured record's params."""
+    for c in slack:
+        if c.source in ("list", "rts") and not c.params and _method_match(plan, c) and _has_result_signal(c):
+            extracted = _extract_prior_params(c.text, plan)
+            if extracted:
+                c.params = extracted
 
 
 # ---- small utils --------------------------------------------------------------------------
@@ -413,6 +518,23 @@ def _set_status(status, text: str):
 
 # ---- plain-text render (frontend §9 copy; Block Kit deferred) ------------------------------
 
+# Collision-evidence markers that must NEVER appear on a CLEAR card. _calibrate already sanitizes
+# the note when it demotes, so this is a last-line guard against any future leak (self-consistency).
+_COLLISION_MARKERS = ("collision", "already tried", "match the plan", "matches on", "match on",
+                      "key param", "two key", "same method", "prior run", "prior work found on")
+
+
+def safe_clear_note(note: str) -> str:
+    """Return the note only if it is safe to show on a CLEAR card, else "". Conservative: drops any
+    note that reads like collision/near-miss evidence so a clear headline can't contradict its body."""
+    if not note:
+        return ""
+    low = note.lower()
+    if any(m in low for m in _COLLISION_MARKERS):
+        return ""
+    return note
+
+
 def format_verdict_text(result: PreflightResult) -> str:
     if result.kind == "parse_fail":
         return f"{result.message}\n\n{DISCLAIMER}"
@@ -422,9 +544,11 @@ def format_verdict_text(result: PreflightResult) -> str:
     v = result.verdict
     lines: list[str] = []
     if v.level == "clear":
+        # Clear means clear: no diff, no collisions, and never a collision-flavoured note.
         lines.append(BODY_CLEAR)
-        if v.note:
-            lines.append(v.note)
+        _note = safe_clear_note(v.note)
+        if _note:
+            lines.append(_note)
         lines.append("Searched the lab record" + (" + literature" if v.literature else "") + ".")
         return "\n".join(lines) + f"\n\n{DISCLAIMER}"
 
