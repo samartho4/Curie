@@ -18,7 +18,7 @@ Two behaviors:
 No Slack content is logged.
 """
 from __future__ import annotations
-import os, re, time
+import os, re, time, logging, threading
 from typing import Optional
 
 from pipeline import logging as reclog
@@ -46,6 +46,16 @@ def ambient_preflight_on() -> bool:
 BELIEF_ALERT = ("⚠️ Heads up — your belief *{claim}* just changed → *{status}*. "
                 "New evidence: {experiment} {run_status}.")
 _RUN_PREFIX = "📊 Run"
+# Robust run-record gate: an optional leading 📊 / :bar_chart: shortcode (or none), then "Run",
+# any case. In production the event text can carry the emoji as the ":bar_chart:" shortcode rather
+# than the unicode glyph — an exact-unicode startswith("📊 Run") silently missed those, so ingest
+# never ran. Matching the shortcode form here is the fix; the parser was already emoji-agnostic.
+_RUN_RE = re.compile(r"^\s*(?:📊|:bar_chart:|:chart[a-z_]*:)?\s*run\b", re.IGNORECASE)
+
+
+def _looks_like_run_record(text: str) -> bool:
+    return bool(_RUN_RE.match(text or ""))
+
 
 _SEEN: dict[str, float] = {}
 _SEEN_TTL = 300.0
@@ -71,6 +81,9 @@ def register(app):
     @app.event("message")
     def handle_message(event, client, logger):
         try:
+            print("CURIE-DIAG ambient msg arrived: subtype=%r has_bot_id=%s ch_is_curie=%s"
+                  % (event.get("subtype"), bool(event.get("bot_id")),
+                     event.get("channel") == os.environ.get("CURIE_CHANNEL_ID")), flush=True)
             if event.get("subtype") not in (None, "bot_message"):
                 return                              # skip edits/joins/thread_broadcast/etc.
             channel = event.get("channel")
@@ -89,7 +102,9 @@ def register(app):
             if not text:
                 return
 
-            if text.startswith(_RUN_PREFIX):
+            if _looks_like_run_record(text):
+                print("CURIE-DIAG ambient routing to run ingest (text_len=%s)" % len(text),
+                      flush=True)
                 _ingest_run_record(client, logger, channel, text)
                 return
 
@@ -98,6 +113,61 @@ def register(app):
                 _ambient_preflight(client, logger, event, channel, text)
         except Exception:
             logger.exception("ambient: message handler failed")
+
+
+# ---- run-record poller (fallback ingest when message.channels isn't delivered) --------------
+# Belt-and-suspenders. Some workspaces don't deliver message.channels over Socket Mode even with
+# the event subscribed + channels:history granted + the bot in-channel (observed live on the
+# Prior Lab dev sandbox: app_mention arrives, message.channels never does). conversations.history
+# DOES work with the bot token, so we poll #experiments for new run-records and ingest them the
+# same way the event handler would. Dedup shares _SEEN, so a record is never double-ingested if
+# the event ever does start arriving. Daemon thread; never raises to the caller.
+
+_POLL_SECONDS = float(os.environ.get("CURIE_POLL_SECONDS", "8"))
+_poller_log = logging.getLogger("curie.run_poller")
+
+
+def start_run_poller(app) -> None:
+    channel = os.environ.get("CURIE_CHANNEL_ID")
+    if not channel:
+        print("CURIE-DIAG run-poller NOT started: CURIE_CHANNEL_ID unset", flush=True)
+        return
+    client = app.client
+
+    def _loop():
+        last_ts = "%.6f" % time.time()          # only ingest records posted AFTER startup
+        print("CURIE-DIAG run-poller started (channel=%s every %ss)" % (channel, _POLL_SECONDS),
+              flush=True)
+        while True:
+            try:
+                r = client.conversations_history(channel=channel, oldest=last_ts, limit=25)
+                data = r.data if hasattr(r, "data") else r
+                msgs = data.get("messages", []) or []
+                own_bot_id, own_user = _own_identity(client)
+                for m in sorted(msgs, key=lambda x: float(x.get("ts", "0"))):
+                    ts = m.get("ts")
+                    if not ts:
+                        continue
+                    if float(ts) > float(last_ts):
+                        last_ts = ts
+                    if _is_own(m, own_bot_id, own_user) or _is_dup(ts):
+                        continue
+                    text = (m.get("text") or "").strip()
+                    if not text:
+                        continue
+                    if _looks_like_run_record(text):
+                        print("CURIE-DIAG run-poller -> ingest (ts=%s)" % ts, flush=True)
+                        _ingest_run_record(client, _poller_log, channel, text)
+                    elif (ambient_preflight_on() and not m.get("bot_id")
+                          and _looks_like_plan(text) and own_user
+                          and ("<@%s>" % own_user) not in text):
+                        print("CURIE-DIAG run-poller -> ambient preflight (ts=%s)" % ts, flush=True)
+                        _ambient_preflight(client, _poller_log, m, channel, text)
+            except Exception:
+                _poller_log.exception("run-poller iteration failed")
+            time.sleep(_POLL_SECONDS)
+
+    threading.Thread(target=_loop, name="curie-run-poller", daemon=True).start()
 
 
 # ---- 1) run-record ingest -------------------------------------------------------------------

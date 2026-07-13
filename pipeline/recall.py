@@ -62,12 +62,19 @@ def is_recall_query(text) -> bool:
 # ---- 2. answer (RTS search → grounded LLM synthesis → cited block) ---------------------------
 
 def answer_blocks(question: str, *, rts, llm, record=None) -> list[dict]:
-    """Search the lab record for the question's topic, synthesize a grounded answer, and return a
-    Block Kit card: answer → source permalink(s) → disclaimer. Never raises."""
+    """Answer from the lab's own record. The structured List is the PRIMARY source (it carries the
+    OUTCOME field — e.g. "gradient collapse / NaN at epoch 3" — which is the actual reason a run was
+    dropped and is NOT a searchable channel message); RTS enriches with the surrounding discussion.
+    Returns a Block Kit card: answer → source permalink(s) → disclaimer. Never raises."""
     try:
-        hits = _search(question, rts)
+        record_hits = _record_candidates(question, record)   # authoritative, outcome-bearing
     except Exception:
-        hits = []
+        record_hits = []
+    try:
+        rts_hits = _search(question, rts)                     # channel context (noise-filtered)
+    except Exception:
+        rts_hits = []
+    hits = _merge(record_hits, rts_hits)
 
     if not hits:
         return [_s(_NO_HITS), _ctx(DISCLAIMER)]
@@ -93,11 +100,14 @@ def answer_blocks(question: str, *, rts, llm, record=None) -> list[dict]:
 
 
 def _search(question: str, rts) -> list[dict]:
-    """≤2 RTS calls: the raw question, then a keyword-only fallback (question words stripped)."""
+    """≤2 RTS calls: the raw question, then a keyword-only fallback (question words stripped).
+    Drops noise hits — other people's questions and bare @mentions never explain a past decision,
+    and feeding the asker's own question back as 'evidence' is what made recall answer 'I don't
+    see it' even when the record held the answer."""
     if rts is None:
         return []
     hits = rts.search(question, limit=12) or []
-    if len(hits) < 3:
+    if len([h for h in hits if not _is_noise(h.get("text"))]) < 3:
         kw = _keywords(question)
         if kw and kw.lower() != question.lower():
             more = rts.search(kw, limit=12) or []
@@ -105,7 +115,75 @@ def _search(question: str, rts) -> list[dict]:
             for h in more:
                 if (h.get("channel"), h.get("ts")) not in seen:
                     hits.append(h)
+    hits = [h for h in hits if not _is_noise(h.get("text"))]
     return hits[:6]
+
+
+def _is_noise(text) -> bool:
+    """A hit that can't be an answer: an empty string, a question (ends with '?' or 'why did we…'),
+    or a bare @mention with no content."""
+    t = (text or "").strip().lower()
+    if not t:
+        return True
+    if t.endswith("?"):
+        return True
+    if t.startswith("@") and len(t) < 40:
+        return True
+    if "why did we" in t or "what happened" in t or "whatever happened" in t:
+        return True
+    return False
+
+
+def _record_candidates(question: str, record) -> list[dict]:
+    """PRIMARY evidence: List rows whose method/params/outcome overlap the question's terms. Reuses
+    record_store.find_candidates (the same matcher the collision check trusts), so the OUTCOME field
+    — the real reason a run was dropped — becomes a snippet the LLM can ground on. Never raises."""
+    if record is None:
+        return []
+    try:
+        if hasattr(record, "available") and not record.available():
+            return []
+        cands = record.find_candidates(_QueryShim(question)) or []
+    except Exception:
+        return []
+    out = []
+    for c in cands:
+        text = (c.get("text") or "").strip()
+        if not text:
+            continue
+        out.append({
+            "source": "list",
+            "title": c.get("title") or "prior run",
+            "text": text,
+            "permalink": c.get("permalink") or "",
+            "outcome": c.get("outcome"),
+            "author": "the lab record",
+            "channel": None,
+            "ts": None,
+        })
+    return out
+
+
+class _QueryShim:
+    """Adapts a plain question into the (aliases/method/params) shape find_candidates expects."""
+    def __init__(self, question: str):
+        kw = _keywords(question)
+        self.method = kw
+        self.aliases = [t for t in kw.split() if len(t) > 1]
+        self.params = {}
+
+
+def _merge(record_hits: list[dict], rts_hits: list[dict]) -> list[dict]:
+    """Record candidates first (authoritative, outcome-bearing), then RTS enrichment, deduped by
+    permalink. Capped so the LLM prompt stays tight."""
+    out, seen = [], set()
+    for h in list(record_hits) + list(rts_hits):
+        key = h.get("permalink") or (h.get("channel"), h.get("ts")) or h.get("title")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
+    return out[:6]
 
 
 def _keywords(question: str) -> str:

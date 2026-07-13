@@ -32,6 +32,8 @@ def main():
     app_home.register(app)         # App Home dashboard
     ambient.register(app)          # run-record ingest + belief alert + ambient preflight
     standing.register(app)         # 'from now on' standing watch + weekly digest
+    ambient.start_run_poller(app)  # fallback ingest via conversations.history (message.channels
+                                   # isn't delivered on this workspace; poll instead)
 
     # Startup probe (non-fatal): which search mode does this sandbox give us?
     try:

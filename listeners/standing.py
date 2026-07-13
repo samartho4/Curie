@@ -1,8 +1,8 @@
 """standing.py — turn a sentence into standing infrastructure (Bubble Lab's escalation beat).
 
-  * "@Prior from now on …"  -> turn ON ambient preflight (listeners.ambient flag) + start a
+  * "@Curie from now on …"  -> turn ON ambient preflight (listeners.ambient flag) + start a
     best-effort weekly belief-digest thread, then reply with a standing-capability card.
-  * "@Prior show this week's digest" / "run the digest" -> post the digest NOW (the demo path).
+  * "@Curie show this week's digest" / "run the digest" -> post the digest NOW (the demo path).
 
 app_mention.py routes these BEFORE preflight via is_standing() / handle_standing() (deterministic,
 no LLM — like the ledger routing). See the wiring note handed back with this change.

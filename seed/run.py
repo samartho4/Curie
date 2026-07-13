@@ -88,10 +88,29 @@ def seed_flavor():
     print("✓ seeded paper-club + general flavor")
 
 
+def seed_cold_open():
+    """Post ONLY the cold-open plant (the 'why did we drop full FT / Anika left' exchange) to the
+    BOTTOM of #experiments. Run this AFTER the main seed (or on its own) so it's the most-recent
+    thing in the channel — the scroll-up in the film lands here. `python -m seed.run --cold-open`"""
+    msgs = STORY.get("cold_open", [])
+    if not msgs:
+        print("  (no cold_open block in lab_story.yaml)"); return
+    for m in msgs:
+        _post(CH, m["who"], m["text"])
+    print(f"✓ seeded cold-open plant ({len(msgs)} msgs) to {CH}")
+
+
 if __name__ == "__main__":
+    if "--cold-open" in sys.argv:                     # targeted: post just the anchor exchange
+        print(f"Posting cold-open plant → channel {CH}{'  (DRY RUN)' if DRY else ''}")
+        seed_cold_open()
+        if not DRY:
+            STATE.write_text(json.dumps(posted, indent=2))
+        sys.exit(0)
     print(f"Seeding '{STORY['lab']['name']}' → channel {CH}{'  (DRY RUN)' if DRY else ''}")
     seed_experiments()
     seed_flavor()
+    seed_cold_open()                                  # full seed ends with the anchor at the bottom
     if not DRY:
         STATE.write_text(json.dumps(posted, indent=2))
         print(f"\n✓ {len(posted)} messages posted. State → {STATE.name}")

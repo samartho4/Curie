@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 
 from tools import record_store as rs
+from pipeline import ledger
 
 # ---- copy (frontend.md §7 layout, §9 deck verbatim, §1 product promise) -------------------
 HEADER = "Curie — your lab's memory"
@@ -26,12 +27,14 @@ SETUP_NOTE = ("Setup isn't automated from this button yet — in the repo, run "
               "and restart me. This tab refreshes each time you open it.")
 RECENT_HEADING = "*Recent activity*"
 RECENT_EMPTY = "Nothing logged yet — react 🧪 on a result message to log it."
+LEDGER_HEADING = "*Where the lab stands*  ·  every claim, one click from its evidence"
+_STATUS_EMOJI = {"supported": "🟢", "refuted": "🔴", "open": "🟡"}
 HOW_TO = (
     "*How to use Curie*\n"
-    "• *Check a plan* — mention `@Prior` with an experiment plan; I check it against the "
+    "• *Check a plan* — mention `@Curie` with an experiment plan; I check it against the "
     "lab record, Slack history, and the literature.\n"
     "• *Log a result* — react 🧪 on a result message; I write it to the Lab Record.\n"
-    "• *Track a bet* — `@Prior track hypothesis: <your claim>` adds it to the hypothesis ledger."
+    "• *Track a bet* — `@Curie track hypothesis: <your claim>` adds it to the hypothesis ledger."
 )
 OPEN_RECORD = "Open the Lab Record"
 RERUN_SETUP = "Re-run setup"
@@ -114,6 +117,11 @@ def _home_blocks(client) -> list[dict]:
     experiments = len(rows) - hypotheses       # non-hypothesis = experiment (record_store semantics)
 
     blocks.append(_s(STATS.format(ex=experiments, hy=hypotheses, co=_collisions_this_month())))
+    ledger_md = _belief_ledger_lines(client)
+    if ledger_md:                              # the crown: hypothesis roll-up, right under the stats
+        blocks.append(_div())
+        blocks.append(_s(LEDGER_HEADING + "\n" + ledger_md))
+    blocks.append(_div())
     blocks.append(_s(RECENT_HEADING + "\n" + _recent_lines(rows)))
     blocks.append(_div())
     blocks.append(_s(HOW_TO))
@@ -129,6 +137,28 @@ def _home_blocks(client) -> list[dict]:
                      "action_id": "home_setup"})
     blocks.append({"type": "actions", "elements": elements})
     return blocks
+
+
+def _belief_ledger_lines(client) -> str:
+    """The hypothesis roll-up (the ledger 'crown'): each tracked belief + status + evidence counts.
+    Reuses pipeline.ledger's deterministic grouping/rollup so App Home and the 'where the lab
+    stands' card never disagree. Returns '' on any failure or when nothing is tracked."""
+    try:
+        hypos, children = ledger._group(ledger._read_rows(rs.RecordStore(client)))
+    except Exception:
+        return ""
+    if not hypos:
+        return ""
+    lines = []
+    for h in hypos[:6]:
+        kids = children.get(h.get("row_id"), [])
+        status = ledger.rollup(h, kids)
+        sup = sum(1 for k in kids if (k.get("polarity") or "").strip().lower() == "supports")
+        con = sum(1 for k in kids if (k.get("polarity") or "").strip().lower() == "contrasts")
+        title = (h.get("title") or "(hypothesis)").strip()[:90]
+        lines.append(f"{_STATUS_EMOJI.get(status, '🟡')} *{title}* — {status.capitalize()}"
+                     f"  ·  🟢 {sup} · 🔴 {con}")
+    return "\n".join(lines)
 
 
 def _recent_lines(rows: list[dict]) -> str:

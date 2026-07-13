@@ -4,10 +4,10 @@
 # Label honestly: this is a simulated lab modeled on real computational-biology workflows.
 
 lab:
-  name: "Antimatter Lab"
+  name: "Anfinsen Lab"
   field: "protein language models for enzyme design"
   channel: "#experiments"
-  description: "Simulated lab workspace for the Curie demo. Modeled on real comp-bio ML workflows."
+  description: "Simulated computational protein-ML lab (named for Christian Anfinsen — sequence determines fold, the dogma behind PLMs). Partners with an external wet-lab that returns kcat/kM assays on a lag. Modeled on real comp-bio ML workflows."
 
 members:                       # map to SEED_USER_TOKEN_1..3 at seed time
   - {handle: anika,  name: "Anika Rao",    token_env: SEED_USER_TOKEN_1, role: "PhD, protein LMs"}
@@ -96,6 +96,14 @@ experiments:
     outcome: "FAILED — 0.3 dropout underfit badly, -4%. Too aggressive for this head size."
     thread:
       - {who: anika, text: "tried 0.3 dropout on the head. way worse, -4%. underfitting. 0.1 max next time"}
+
+# COLD-OPEN PLANT (posted LAST, so it sits at the bottom of #experiments). This is the film's
+# anchor: the scroll-up lands here. Priya wants to run the full ESM fine-tune and can't find out
+# if it was tried — the knowledge left with Anika. Sets up the collision (0:15) AND the payoff
+# recall (2:22). Post via:  python -m seed.run --cold-open
+cold_open:
+  - {who: priya, text: "onboarding q — I want to run the full ESM fine-tune on v1 this week. did anyone try this already? I can't find anything in here"}
+  - {who: marco, text: ":shrug: Anika ran a bunch of ESM stuff but she left last month. it's all buried in the scrollback somewhere. good luck"}
 
 # Extra channel color so the workspace feels lived-in (judges scroll).
 paper_club:

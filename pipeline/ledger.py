@@ -5,7 +5,7 @@ pipeline lane: pure-ish logic — deps (record, client) are INJECTED, no global 
 calls anywhere in this module. The ledger is deterministic; the LLM never sets a hypothesis status.
 
 The listener routes these BEFORE preflight:
-    claim = ledger.is_track_hypothesis(plan_text)   # "@Prior track hypothesis: <claim>"
+    claim = ledger.is_track_hypothesis(plan_text)   # "@Curie track hypothesis: <claim>"
     ledger.is_stand_query(plan_text)                # "where does the lab stand?" / "lab status" …
 
 Data model (backend §4.1): hypotheses are PARENT rows (kind=hypothesis) in the Lab Record List;
@@ -36,7 +36,7 @@ CHART_TITLE = "Evidence per hypothesis"   # native bar chart above the itemized 
 # §9 verbatim, encoded for mrkdwn: &lt;/&gt; render as < > (a raw "<your claim>" would be
 # swallowed as a broken link control sequence).
 LEDGER_EMPTY = ("No hypotheses tracked yet. Start one: "
-                "`@Prior track hypothesis: &lt;your claim&gt;`")
+                "`@Curie track hypothesis: &lt;your claim&gt;`")
 LEDGER_FOOTER = "Every claim links to its evidence · compiled by Curie from #experiments"
 # Weekly belief-digest copy (used by the run-now path + the best-effort Monday schedule).
 DIGEST_HEADER = "This week's belief changes"
@@ -48,7 +48,7 @@ NO_EVIDENCE = "no evidence linked yet"
 TRACK_ACK = ("🟡 Tracking: *{claim}* — Open. Results logged with 🧪 roll up as evidence. "
              "Ask “where does the lab stand?” any time.")
 TRACK_EMPTY = ("Give the hypothesis a claim — e.g. "
-               "`@Prior track hypothesis: curriculum ordering improves convergence`.")
+               "`@Curie track hypothesis: curriculum ordering improves convergence`.")
 TRACK_FAIL = ("⚠️ I couldn't add that hypothesis to the ledger — the write didn't go through. "
               "Give it a minute, then try again.")
 NOT_SET_UP = "Curie isn't set up in this workspace yet — open my App Home to finish setup."  # §4E
