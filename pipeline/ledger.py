@@ -366,7 +366,7 @@ def _source_link(row: dict) -> str:
             if isinstance(v, str) and _is_url(v):
                 return v
             if isinstance(v, dict):
-                u = v.get("permalink") or v.get("url") or ""
+                u = v.get("value") or v.get("permalink") or v.get("url") or ""
                 if _is_url(u):
                     return u
         t = f.get("text")

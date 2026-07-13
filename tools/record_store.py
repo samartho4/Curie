@@ -95,6 +95,17 @@ def _row_fields(row: dict) -> dict:
 def _flatten_value(f: dict) -> str:
     if "rich_text" in f and f["rich_text"]:
         return _flatten_rich_text(f["rich_text"])
+    # message columns (e.g. the `source` provenance link) read back as
+    # message:[{value|permalink|url, channel_id, ts}] — surface the URL so callers that flatten
+    # fields (find_candidates → _row_permalink) can cite it, not just ledger._source_link.
+    if f.get("message"):
+        for m in f["message"]:
+            if isinstance(m, dict):
+                u = m.get("value") or m.get("permalink") or m.get("url") or ""
+                if isinstance(u, str) and u.startswith("http"):
+                    return u
+            elif isinstance(m, str) and m.startswith("http"):
+                return m
     for k in ("text", "value", "select", "date"):
         if f.get(k):
             v = f[k]
